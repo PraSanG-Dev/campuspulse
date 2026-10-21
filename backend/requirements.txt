@@ -1,0 +1,18 @@
+# Python dependencies for CampusPulse backend
+# Install with: pip install -r requirements.txt
+#
+# Note: version pins are intentionally loose so pip can resolve
+# pre-built wheels for your Python version automatically.
+
+fastapi                      # web framework
+uvicorn[standard]            # ASGI server (with websockets + watchfiles for reload)
+python-multipart             # needed for file uploads in FastAPI
+pymupdf                      # PDF text extraction (imported as 'fitz')
+httpx                        # async HTTP client
+pydantic                     # data validation (FastAPI uses this internally)
+pydantic-settings            # loads .env into a Settings class
+python-jose[cryptography]    # JWT verification
+slowapi                      # rate limiting middleware
+google-generativeai          # Gemini LLM SDK (Phase 6)
+pytest
+pytest-asyncio
