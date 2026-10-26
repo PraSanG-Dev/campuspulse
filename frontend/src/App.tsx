@@ -1,6 +1,9 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { AuthProvider } from '@/lib/AuthContext'
+import { ProtectedRoute } from '@/components/layout/ProtectedRoute'
 import { AppLayout } from '@/components/layout/AppLayout'
 
+import AuthPage   from '@/pages/Auth'
 import Dashboard  from '@/pages/Dashboard'
 import Attendance from '@/pages/Attendance'
 import Notices    from '@/pages/Notices'
@@ -10,22 +13,75 @@ import Assistant  from '@/pages/Assistant'
 export default function App() {
   return (
     <BrowserRouter>
-      {/*
-        AppLayout wraps all routes so the sidebar + topbar are always present.
-        In Phase 4 we'll add auth: unauthenticated users will be redirected
-        to a /login page that renders WITHOUT AppLayout.
-      */}
-      <AppLayout>
+      <AuthProvider>
         <Routes>
-          <Route path="/"           element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard"  element={<Dashboard />} />
-          <Route path="/attendance" element={<Attendance />} />
-          <Route path="/notices"    element={<Notices />} />
-          <Route path="/timetable"  element={<Timetable />} />
-          <Route path="/assistant"  element={<Assistant />} />
-          <Route path="*"           element={<Navigate to="/dashboard" replace />} />
+          {/* Public Auth Route */}
+          <Route path="/login" element={<AuthPage />} />
+
+          {/* Protected Routes inside AppLayout */}
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <Navigate to="/dashboard" replace />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <AppLayout>
+                  <Dashboard />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/attendance"
+            element={
+              <ProtectedRoute>
+                <AppLayout>
+                  <Attendance />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/notices"
+            element={
+              <ProtectedRoute>
+                <AppLayout>
+                  <Notices />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/timetable"
+            element={
+              <ProtectedRoute>
+                <AppLayout>
+                  <Timetable />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/assistant"
+            element={
+              <ProtectedRoute>
+                <AppLayout>
+                  <Assistant />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Catch-all */}
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
-      </AppLayout>
+      </AuthProvider>
     </BrowserRouter>
   )
 }

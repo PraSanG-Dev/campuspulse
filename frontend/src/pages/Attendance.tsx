@@ -1,74 +1,31 @@
-import { useState } from 'react'
-import { Plus, CheckCircle, XCircle, MinusCircle, Trash2, Target, BookOpen } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { Plus, CheckCircle, XCircle, MinusCircle, Trash2, Target, BookOpen, AlertCircle, RefreshCw } from 'lucide-react'
 import { computeAttendance, attendanceStatusColor, attendanceBarColor } from '@/lib/attendance'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { Spinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/utils'
+import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/lib/AuthContext'
+import { AttendanceStatus, Subject as DbSubject, AttendanceRecord as DbRecord } from '@/types'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type AttendanceStatus = 'present' | 'absent' | 'cancelled'
-
-interface AttendanceRecord {
-  id: string
-  date: string          // 'YYYY-MM-DD'
-  status: AttendanceStatus
-}
-
-interface Subject {
+interface SubjectWithRecords {
   id: string
   name: string
-  records: AttendanceRecord[]
+  records: Array<{
+    id: string
+    date: string
+    status: AttendanceStatus
+  }>
 }
-
-// ── Sample data ───────────────────────────────────────────────────────────────
-// Clearly labeled — replaced with Supabase data in Phase 4.
-
-const INITIAL_SUBJECTS: Subject[] = [
-  {
-    id: 's1', name: 'Data Structures',
-    records: [
-      { id: 'r1', date: '2026-10-01', status: 'present' },
-      { id: 'r2', date: '2026-10-03', status: 'present' },
-      { id: 'r3', date: '2026-10-06', status: 'absent' },
-      { id: 'r4', date: '2026-10-08', status: 'present' },
-      { id: 'r5', date: '2026-10-10', status: 'cancelled' },
-      { id: 'r6', date: '2026-10-13', status: 'present' },
-      { id: 'r7', date: '2026-10-15', status: 'present' },
-      { id: 'r8', date: '2026-10-17', status: 'absent' },
-      { id: 'r9', date: '2026-10-20', status: 'present' },
-      { id: 'r10', date: '2026-10-22', status: 'present' },
-    ],
-  },
-  {
-    id: 's2', name: 'DBMS',
-    records: [
-      { id: 'r11', date: '2026-10-01', status: 'present' },
-      { id: 'r12', date: '2026-10-04', status: 'present' },
-      { id: 'r13', date: '2026-10-07', status: 'present' },
-      { id: 'r14', date: '2026-10-11', status: 'present' },
-      { id: 'r15', date: '2026-10-14', status: 'absent' },
-      { id: 'r16', date: '2026-10-18', status: 'present' },
-    ],
-  },
-  {
-    id: 's3', name: 'Operating Systems',
-    records: [
-      { id: 'r17', date: '2026-10-02', status: 'present' },
-      { id: 'r18', date: '2026-10-05', status: 'absent' },
-      { id: 'r19', date: '2026-10-09', status: 'absent' },
-      { id: 'r20', date: '2026-10-12', status: 'present' },
-      { id: 'r21', date: '2026-10-16', status: 'present' },
-      { id: 'r22', date: '2026-10-19', status: 'absent' },
-    ],
-  },
-]
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function countsByStatus(records: AttendanceRecord[]) {
+function countsByStatus(records: Array<{ status: AttendanceStatus }>) {
   let present = 0, absent = 0, cancelled = 0
   for (const r of records) {
     if (r.status === 'present')   present++
@@ -78,14 +35,11 @@ function countsByStatus(records: AttendanceRecord[]) {
   return { present, absent, cancelled, conducted: present + absent }
 }
 
-let nextId = 1000
-function uid() { return String(nextId++) }
-
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 function TargetSetting({ target, onChange }: { target: number; onChange: (v: number) => void }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-surface-border bg-white px-4 py-3">
+    <div className="flex items-center gap-3 rounded-xl border border-surface-border bg-white px-4 py-3 shadow-sm">
       <Target className="size-5 shrink-0 text-brand-500" />
       <label htmlFor="target-input" className="text-sm font-medium text-gray-700 whitespace-nowrap">
         Attendance target
@@ -97,7 +51,7 @@ function TargetSetting({ target, onChange }: { target: number; onChange: (v: num
           min={50} max={100} step={5}
           value={target}
           onChange={e => onChange(Number(e.target.value))}
-          className="w-28 accent-brand-600"
+          className="w-28 accent-brand-600 cursor-pointer"
           aria-label={`Attendance target: ${target}%`}
         />
         <span className="w-10 text-right text-sm font-bold text-brand-600 tabular-nums">
@@ -109,7 +63,7 @@ function TargetSetting({ target, onChange }: { target: number; onChange: (v: num
 }
 
 interface SubjectCardProps {
-  subject: Subject
+  subject: SubjectWithRecords
   target: number
   onRecord: (subjectId: string, status: AttendanceStatus) => void
   onDelete: (subjectId: string) => void
@@ -124,15 +78,16 @@ function SubjectCard({ subject, target, onRecord, onDelete }: SubjectCardProps) 
   const barWidth = stats.percentage === null ? 0 : Math.min(100, stats.percentage)
 
   return (
-    <Card>
+    <Card className="transition-shadow hover:shadow-md">
       <CardHeader>
-        <CardTitle className="normal-case text-base font-semibold text-gray-800">
+        <CardTitle className="normal-case text-base font-semibold text-gray-800 truncate">
           {subject.name}
         </CardTitle>
         <button
           onClick={() => onDelete(subject.id)}
-          className="rounded p-1 text-gray-300 hover:text-red-400 hover:bg-red-50 transition-colors"
+          className="rounded p-1 text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
           aria-label={`Delete ${subject.name}`}
+          title="Delete subject"
         >
           <Trash2 className="size-4" />
         </button>
@@ -192,13 +147,13 @@ function SubjectCard({ subject, target, onRecord, onDelete }: SubjectCardProps) 
               : 'bg-amber-50 text-amber-700',
           )}>
             {stats.needed === 'not_reachable' && (
-              <span>⚠️ 100% is no longer reachable — you have an absence on record.</span>
+              <span>⚠️ 100% target is not reachable — you have at least one absence.</span>
             )}
             {stats.needed === 0 && stats.canMiss > 0 && (
-              <span>✓ On track! You can safely miss <strong>{stats.canMiss}</strong> more class{stats.canMiss !== 1 ? 'es' : ''} and stay above {target}%.</span>
+              <span>✓ On track! You can safely miss <strong>{stats.canMiss}</strong> more class{stats.canMiss !== 1 ? 'es' : ''} and maintain &ge;{target}%.</span>
             )}
             {stats.needed === 0 && stats.canMiss === 0 && (
-              <span>✓ Exactly at target. Don't miss any more classes!</span>
+              <span>✓ Exactly at target. Any absence will drop your score below {target}%.</span>
             )}
             {typeof stats.needed === 'number' && stats.needed > 0 && (
               <span>⚡ Attend <strong>{stats.needed}</strong> more class{stats.needed !== 1 ? 'es' : ''} in a row to reach {target}%.</span>
@@ -243,9 +198,10 @@ function SubjectCard({ subject, target, onRecord, onDelete }: SubjectCardProps) 
 interface AddSubjectFormProps {
   onAdd: (name: string) => void
   onCancel: () => void
+  isLoading?: boolean
 }
 
-function AddSubjectForm({ onAdd, onCancel }: AddSubjectFormProps) {
+function AddSubjectForm({ onAdd, onCancel, isLoading }: AddSubjectFormProps) {
   const [name, setName] = useState('')
 
   function handleSubmit(e: React.FormEvent) {
@@ -268,14 +224,18 @@ function AddSubjectForm({ onAdd, onCancel }: AddSubjectFormProps) {
             type="text"
             value={name}
             onChange={e => setName(e.target.value)}
-            placeholder="e.g. Computer Networks"
+            placeholder="e.g. Cloud Computing or DBMS"
             autoFocus
             maxLength={80}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20"
           />
           <div className="flex gap-2">
-            <Button type="submit" size="sm" disabled={!name.trim()}>Add subject</Button>
-            <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
+            <Button type="submit" size="sm" isLoading={isLoading} disabled={!name.trim()}>
+              Add subject
+            </Button>
+            <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+              Cancel
+            </Button>
           </div>
         </form>
       </CardContent>
@@ -283,45 +243,206 @@ function AddSubjectForm({ onAdd, onCancel }: AddSubjectFormProps) {
   )
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
+// ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function Attendance() {
-  const [subjects, setSubjects] = useState<Subject[]>(INITIAL_SUBJECTS)
-  const [target, setTarget] = useState(75)
+  const { user, profile, isConfigured } = useAuth()
+  const [subjects, setSubjects] = useState<SubjectWithRecords[]>([])
+  const [target, setTarget] = useState<number>(75)
   const [showAddForm, setShowAddForm] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [savingSubject, setSavingSubject] = useState(false)
+  const [errorBanner, setErrorBanner] = useState<string | null>(null)
 
-  function handleAddSubject(name: string) {
-    setSubjects(prev => [...prev, { id: uid(), name, records: [] }])
-    setShowAddForm(false)
+  // Fetch subjects, attendance records, and target from Supabase
+  const loadData = useCallback(async () => {
+    if (!user || !isConfigured) {
+      setLoading(false)
+      return
+    }
+
+    setLoading(true)
+    setErrorBanner(null)
+
+    try {
+      // 1. Fetch user profile target if available
+      if (profile?.attendance_target) {
+        setTarget(profile.attendance_target)
+      } else {
+        const { data: profData } = await supabase
+          .from('profiles')
+          .select('attendance_target')
+          .eq('id', user.id)
+          .single()
+        if (profData?.attendance_target) {
+          setTarget(profData.attendance_target)
+        }
+      }
+
+      // 2. Fetch subjects
+      const { data: dbSubjects, error: subError } = await supabase
+        .from('subjects')
+        .select('*')
+        .order('created_at', { ascending: true })
+
+      if (subError) throw subError
+
+      // 3. Fetch attendance records
+      const { data: dbRecords, error: recError } = await supabase
+        .from('attendance_records')
+        .select('*')
+        .order('class_date', { ascending: true })
+
+      if (recError) throw recError
+
+      // Group records by subject
+      const recordsBySubject: Record<string, Array<{ id: string; date: string; status: AttendanceStatus }>> = {}
+      ;(dbRecords as DbRecord[] | null)?.forEach(r => {
+        if (!recordsBySubject[r.subject_id]) {
+          recordsBySubject[r.subject_id] = []
+        }
+        recordsBySubject[r.subject_id].push({
+          id: r.id,
+          date: r.class_date,
+          status: r.status as AttendanceStatus,
+        })
+      })
+
+      const combined: SubjectWithRecords[] = ((dbSubjects as DbSubject[]) || []).map(s => ({
+        id: s.id,
+        name: s.name,
+        records: recordsBySubject[s.id] || [],
+      }))
+
+      setSubjects(combined)
+    } catch (err: unknown) {
+      console.error('Error loading attendance from Supabase:', err)
+      const msg = err instanceof Error ? err.message : 'Could not fetch data from database'
+      setErrorBanner(`Database sync notice: ${msg}`)
+    } finally {
+      setLoading(false)
+    }
+  }, [user, profile, isConfigured])
+
+  useEffect(() => {
+    loadData()
+  }, [loadData])
+
+  // Update target in Supabase
+  async function handleTargetChange(newTarget: number) {
+    setTarget(newTarget)
+    if (!user || !isConfigured) return
+
+    try {
+      await supabase
+        .from('profiles')
+        .update({ attendance_target: newTarget })
+        .eq('id', user.id)
+    } catch (err) {
+      console.warn('Could not persist target to profile:', err)
+    }
   }
 
-  function handleDeleteSubject(id: string) {
-    if (!confirm('Delete this subject and all its records?')) return
-    setSubjects(prev => prev.filter(s => s.id !== id))
+  // Add subject
+  async function handleAddSubject(name: string) {
+    if (!user || !isConfigured) {
+      setErrorBanner('Please connect your Supabase account to save subjects.')
+      return
+    }
+
+    setSavingSubject(true)
+    setErrorBanner(null)
+
+    try {
+      const { data, error } = await supabase
+        .from('subjects')
+        .insert({
+          name,
+          user_id: user.id,
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+
+      setSubjects(prev => [
+        ...prev,
+        {
+          id: (data as DbSubject).id,
+          name: (data as DbSubject).name,
+          records: [],
+        },
+      ])
+      setShowAddForm(false)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to add subject'
+      setErrorBanner(msg)
+    } finally {
+      setSavingSubject(false)
+    }
   }
 
-  function handleRecord(subjectId: string, status: AttendanceStatus) {
+  // Delete subject
+  async function handleDeleteSubject(subjectId: string) {
+    if (!confirm('Delete this subject and all its recorded attendance?')) return
+
+    try {
+      const { error } = await supabase
+        .from('subjects')
+        .delete()
+        .eq('id', subjectId)
+
+      if (error) throw error
+
+      setSubjects(prev => prev.filter(s => s.id !== subjectId))
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete subject'
+      setErrorBanner(msg)
+    }
+  }
+
+  // Record attendance
+  async function handleRecord(subjectId: string, status: AttendanceStatus) {
+    if (!user || !isConfigured) {
+      setErrorBanner('Please connect Supabase to record attendance.')
+      return
+    }
+
     const today = new Date().toISOString().slice(0, 10)
+
+    // Optimistic UI update
     setSubjects(prev =>
       prev.map(s => {
         if (s.id !== subjectId) return s
-        // Prevent duplicate records for the same day
-        const alreadyRecorded = s.records.some(r => r.date === today)
-        if (alreadyRecorded) {
-          // Update the existing record for today instead
-          return {
-            ...s,
-            records: s.records.map(r =>
-              r.date === today ? { ...r, status } : r,
-            ),
-          }
-        }
-        return {
-          ...s,
-          records: [...s.records, { id: uid(), date: today, status }],
-        }
+        const exists = s.records.some(r => r.date === today)
+        const updatedRecords = exists
+          ? s.records.map(r => (r.date === today ? { ...r, status } : r))
+          : [...s.records, { id: 'temp-' + Date.now(), date: today, status }]
+        return { ...s, records: updatedRecords }
       }),
     )
+
+    try {
+      const { error } = await supabase
+        .from('attendance_records')
+        .upsert(
+          {
+            user_id: user.id,
+            subject_id: subjectId,
+            class_date: today,
+            status,
+          },
+          { onConflict: 'subject_id,class_date' },
+        )
+
+      if (error) throw error
+    } catch (err: unknown) {
+      console.error('Failed to save attendance record:', err)
+      const msg = err instanceof Error ? err.message : 'Failed to save attendance'
+      setErrorBanner(msg)
+      // Revert from server
+      loadData()
+    }
   }
 
   // Overall stats across all subjects
@@ -334,28 +455,58 @@ export default function Attendance() {
   )
   const overallStats = computeAttendance(overall.present, overall.conducted, target)
 
+  if (loading) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <div className="flex flex-col items-center gap-2">
+          <Spinner size="md" />
+          <p className="text-xs text-gray-400">Loading your subjects & attendance...</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-5">
-
-      {/* Sample data banner */}
-      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
-        <strong>Sample data</strong> — records shown are demo only. Phase 4 will save everything to your account.
+      {/* Real Supabase RLS Indicator banner */}
+      <div className="flex items-center justify-between rounded-lg border border-brand-200 bg-brand-50/50 px-4 py-2 text-xs text-brand-800">
+        <div className="flex items-center gap-2">
+          <span className="size-2 rounded-full bg-green-500 animate-pulse" />
+          <span>
+            Connected to <strong>Supabase</strong> with Row-Level Security active (User: {user?.email})
+          </span>
+        </div>
+        <button
+          onClick={loadData}
+          className="flex items-center gap-1 text-brand-700 hover:text-brand-900 transition font-medium"
+          title="Refresh database records"
+        >
+          <RefreshCw className="size-3" />
+          <span>Refresh</span>
+        </button>
       </div>
+
+      {errorBanner && (
+        <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700">
+          <AlertCircle className="size-4 shrink-0" />
+          <span>{errorBanner}</span>
+        </div>
+      )}
 
       {/* Target + overall summary */}
       <div className="space-y-3">
-        <TargetSetting target={target} onChange={setTarget} />
+        <TargetSetting target={target} onChange={handleTargetChange} />
 
         {overall.conducted > 0 && (
           <div className={cn(
-            'rounded-xl border px-4 py-3 text-sm',
+            'rounded-xl border px-4 py-3 text-sm shadow-sm transition-colors',
             (overallStats.percentage ?? 0) >= target
               ? 'border-green-200 bg-green-50 text-green-800'
               : 'border-red-200 bg-red-50 text-red-800',
           )}>
-            <span className="font-semibold">Overall: </span>
+            <span className="font-semibold">Overall Attendance: </span>
             {overallStats.percentage}% across {subjects.length} subject{subjects.length !== 1 ? 's' : ''}
-            {' '}({overall.present}/{overall.conducted} classes attended)
+            {' '}({overall.present}/{overall.conducted} classes conducted)
           </div>
         )}
       </div>
@@ -380,6 +531,7 @@ export default function Attendance() {
         <AddSubjectForm
           onAdd={handleAddSubject}
           onCancel={() => setShowAddForm(false)}
+          isLoading={savingSubject}
         />
       )}
 
@@ -387,11 +539,11 @@ export default function Attendance() {
       {subjects.length === 0 ? (
         <EmptyState
           icon={BookOpen}
-          title="No subjects yet"
-          description="Add your first subject to start tracking attendance."
+          title="No subjects registered yet"
+          description="Add your course subjects to start logging daily attendance and tracking target percentages."
           action={
             <Button size="sm" onClick={() => setShowAddForm(true)}>
-              <Plus className="size-4" /> Add subject
+              <Plus className="size-4" /> Add your first subject
             </Button>
           }
         />

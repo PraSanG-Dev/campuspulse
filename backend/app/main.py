@@ -10,13 +10,14 @@ What lives here:
 Everything else (documents, notices, assistant) lives in app/routers/.
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from app.config import settings
+from app.auth import get_current_user_id
 from app.routers import documents, notices, assistant
 
 # ── Rate limiter ──────────────────────────────────────────────────────────────
@@ -48,8 +49,14 @@ app.include_router(notices.router,   prefix="/api")
 app.include_router(assistant.router, prefix="/api")
 
 
-# ── Health check ─────────────────────────────────────────────────────────────
+# ── Health check & Auth verification ─────────────────────────────────────────
 @app.get("/health", tags=["health"])
 def health():
     """No auth required. Used by Render and monitoring tools."""
     return {"status": "ok", "version": app.version}
+
+
+@app.get("/api/auth/me", tags=["auth"])
+def auth_me(user_id: str = Depends(get_current_user_id)):
+    """Verifies that the Supabase JWT forwarded from the frontend is valid."""
+    return {"user_id": user_id, "status": "authenticated"}
