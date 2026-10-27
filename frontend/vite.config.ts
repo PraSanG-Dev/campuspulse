@@ -14,6 +14,6 @@ export default defineConfig({
   test: {
     // Vitest config lives here so you don't need a separate file
     globals: true,
-    environment: 'jsdom',
+    environment: 'node',
   },
 })

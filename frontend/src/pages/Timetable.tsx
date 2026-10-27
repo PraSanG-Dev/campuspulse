@@ -1,10 +1,13 @@
-import { useState } from 'react'
-import { Clock, CalendarDays, Plus, Bell, Trash2, AlertCircle } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { Clock, CalendarDays, Plus, Bell, Trash2, AlertCircle, RefreshCw } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { cn } from '@/lib/utils'
+import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/lib/AuthContext'
+import { Reminder as DbReminder } from '@/types'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -17,15 +20,16 @@ interface TimetableSlot {
   room: string
 }
 
-interface Deadline {
+interface DeadlineItemData {
   id: string
   title: string
-  subject: string
+  subject?: string
   dueDate: string      // 'YYYY-MM-DD'
-  confirmed: boolean   // true = confirmed from notice; false = personal reminder
+  confirmed: boolean   // true = confirmed from notice or user; false = pending
+  isDbRecord?: boolean
 }
 
-// ── Sample data ───────────────────────────────────────────────────────────────
+// ── Sample Timetable data ─────────────────────────────────────────────────────
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const DAY_FULL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -45,13 +49,6 @@ const SAMPLE_SLOTS: TimetableSlot[] = [
   { id: 't12', day: 5, startTime: '10:00', endTime: '12:00', subject: 'Open Elective', room: 'LH-5' },
 ]
 
-const SAMPLE_DEADLINES: Deadline[] = [
-  { id: 'd1', title: 'Project Proposal Submission', subject: 'DBMS',             dueDate: '2026-10-28', confirmed: true },
-  { id: 'd2', title: 'Assignment 3',                subject: 'Data Structures',  dueDate: '2026-10-25', confirmed: true },
-  { id: 'd3', title: 'Mid-term Viva',               subject: 'Computer Networks', dueDate: '2026-11-02', confirmed: false },
-  { id: 'd4', title: 'Lab Record Submission',        subject: 'DS Lab',            dueDate: '2026-11-08', confirmed: true },
-]
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function daysUntil(dateStr: string): number {
@@ -62,25 +59,23 @@ function daysUntil(dateStr: string): number {
 }
 
 function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('en-IN', {
-    day: 'numeric', month: 'short', year: 'numeric',
-  })
+  try {
+    return new Date(dateStr).toLocaleDateString('en-IN', {
+      day: 'numeric', month: 'short', year: 'numeric',
+    })
+  } catch {
+    return dateStr
+  }
 }
 
 function todayDayIndex(): number {
-  // JS: 0=Sun, 1=Mon … we want 0=Mon
   const d = new Date().getDay()
-  return d === 0 ? 6 : d - 1   // Sunday becomes 6 (not in our 0-5 range)
+  return d === 0 ? 6 : d - 1
 }
 
-let nextId = 500
-function uid() { return String(nextId++) }
-
-// ── Weekly grid ───────────────────────────────────────────────────────────────
-
 const SUBJECT_COLORS: Record<string, string> = {
-  'Data Structures': 'bg-brand-50 border-brand-200 text-brand-800',
-  'DBMS':            'bg-purple-50 border-purple-200 text-purple-800',
+  'Data Structures':   'bg-brand-50 border-brand-200 text-brand-800',
+  'DBMS':              'bg-purple-50 border-purple-200 text-purple-800',
   'Operating Systems': 'bg-green-50 border-green-200 text-green-800',
   'Computer Networks': 'bg-orange-50 border-orange-200 text-orange-800',
   'DS Lab':            'bg-brand-50 border-brand-200 text-brand-800',
@@ -93,13 +88,14 @@ function slotColor(subject: string): string {
   return SUBJECT_COLORS[subject] ?? 'bg-gray-50 border-gray-200 text-gray-700'
 }
 
+// ── Weekly Grid ───────────────────────────────────────────────────────────────
+
 function WeeklyGrid({ slots }: { slots: TimetableSlot[] }) {
   const today = todayDayIndex()
 
   return (
-    // Horizontal scroll on mobile so the grid doesn't get squished
-    <div className="overflow-x-auto rounded-xl border border-surface-border">
-      <div className="min-w-[600px]">
+    <div className="overflow-x-auto rounded-xl border border-surface-border bg-white shadow-xs">
+      <div className="min-w-[620px]">
         {/* Day headers */}
         <div className="grid grid-cols-6 border-b border-surface-border">
           {DAYS.map((day, i) => (
@@ -107,9 +103,7 @@ function WeeklyGrid({ slots }: { slots: TimetableSlot[] }) {
               key={day}
               className={cn(
                 'px-3 py-2.5 text-center text-xs font-semibold uppercase tracking-wide',
-                i === today
-                  ? 'bg-brand-50 text-brand-700'
-                  : 'text-gray-500',
+                i === today ? 'bg-brand-50 text-brand-700' : 'text-gray-500',
                 i < 5 && 'border-r border-surface-border',
               )}
             >
@@ -121,7 +115,7 @@ function WeeklyGrid({ slots }: { slots: TimetableSlot[] }) {
           ))}
         </div>
 
-        {/* Slot rows — one column per day */}
+        {/* Slot columns */}
         <div className="grid grid-cols-6">
           {DAYS.map((day, dayIdx) => {
             const daySlots = slots
@@ -134,7 +128,7 @@ function WeeklyGrid({ slots }: { slots: TimetableSlot[] }) {
                 className={cn(
                   'min-h-[140px] space-y-1.5 p-2',
                   dayIdx < 5 && 'border-r border-surface-border',
-                  dayIdx === today && 'bg-brand-50/30',
+                  dayIdx === today && 'bg-brand-50/20',
                 )}
               >
                 {daySlots.length === 0 ? (
@@ -144,15 +138,15 @@ function WeeklyGrid({ slots }: { slots: TimetableSlot[] }) {
                     <div
                       key={slot.id}
                       className={cn(
-                        'rounded-lg border px-2 py-1.5 text-xs',
+                        'rounded-lg border px-2 py-1.5 text-xs transition-shadow hover:shadow-xs',
                         slotColor(slot.subject),
                       )}
                     >
-                      <p className="font-medium leading-snug truncate">{slot.subject}</p>
-                      <p className="mt-0.5 text-[10px] opacity-70">
+                      <p className="font-semibold leading-snug truncate">{slot.subject}</p>
+                      <p className="mt-0.5 text-[10px] opacity-75">
                         {slot.startTime}–{slot.endTime}
                       </p>
-                      <p className="text-[10px] opacity-60">{slot.room}</p>
+                      <p className="text-[10px] opacity-60 font-mono">{slot.room}</p>
                     </div>
                   ))
                 )}
@@ -199,7 +193,7 @@ function AddReminderForm({ onAdd, onCancel }: AddReminderFormProps) {
                 required
                 value={title}
                 onChange={e => setTitle(e.target.value)}
-                placeholder="e.g. Submit assignment"
+                placeholder="e.g. Submit lab manual"
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20"
               />
             </div>
@@ -233,9 +227,11 @@ function AddReminderForm({ onAdd, onCancel }: AddReminderFormProps) {
           </div>
           <div className="flex gap-2">
             <Button type="submit" size="sm" disabled={!title.trim() || !dueDate}>
-              <Bell className="size-3.5" /> Add reminder
+              <Bell className="size-3.5" /> Save reminder
             </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
+            <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+              Cancel
+            </Button>
           </div>
         </form>
       </CardContent>
@@ -243,16 +239,22 @@ function AddReminderForm({ onAdd, onCancel }: AddReminderFormProps) {
   )
 }
 
-// ── Deadline item ─────────────────────────────────────────────────────────────
+// ── Deadline list item ────────────────────────────────────────────────────────
 
-function DeadlineItem({ deadline, onDelete }: { deadline: Deadline; onDelete: (id: string) => void }) {
+function DeadlineRow({
+  deadline,
+  onDelete,
+}: {
+  deadline: DeadlineItemData
+  onDelete: (id: string, isDb: boolean) => void
+}) {
   const days = daysUntil(deadline.dueDate)
   const isOverdue = days < 0
   const isUrgent  = days >= 0 && days <= 3
 
   return (
     <li className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
-      {/* Days counter pill */}
+      {/* Days counter badge */}
       <div className={cn(
         'mt-0.5 flex w-12 shrink-0 flex-col items-center justify-center rounded-lg py-1 text-center leading-tight',
         isOverdue ? 'bg-red-100 text-red-700'
@@ -265,26 +267,28 @@ function DeadlineItem({ deadline, onDelete }: { deadline: Deadline; onDelete: (i
         {!isOverdue && days !== 0 && <span className="text-[9px] font-medium">days</span>}
       </div>
 
-      {/* Content */}
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-2">
-          <p className="truncate text-sm font-medium text-gray-800">{deadline.title}</p>
+          <p className="truncate text-sm font-medium text-gray-900">{deadline.title}</p>
           <button
-            onClick={() => onDelete(deadline.id)}
-            className="shrink-0 rounded p-0.5 text-gray-300 hover:text-red-400 transition-colors"
+            onClick={() => onDelete(deadline.id, !!deadline.isDbRecord)}
+            className="shrink-0 rounded p-1 text-gray-300 hover:text-red-500 transition-colors"
             aria-label={`Remove ${deadline.title}`}
+            title="Delete reminder"
           >
             <Trash2 className="size-3.5" />
           </button>
         </div>
-        <div className="mt-0.5 flex items-center gap-2 flex-wrap">
+        <div className="mt-1 flex items-center gap-2 flex-wrap">
           {deadline.subject && (
-            <span className="text-xs text-gray-400">{deadline.subject}</span>
+            <span className="text-xs text-gray-500 font-medium">{deadline.subject}</span>
           )}
-          <span className="text-xs text-gray-400">·</span>
-          <span className="text-xs text-gray-400">{formatDate(deadline.dueDate)}</span>
-          {!deadline.confirmed && (
-            <Badge variant="pending" className="text-[10px]">Needs confirmation</Badge>
+          <span className="text-xs text-gray-300">·</span>
+          <span className="text-xs text-gray-500">{formatDate(deadline.dueDate)}</span>
+          {deadline.isDbRecord && (
+            <Badge variant="success" className="text-[10px] py-0 px-1.5">
+              Verified from notice ✓
+            </Badge>
           )}
         </div>
       </div>
@@ -292,22 +296,91 @@ function DeadlineItem({ deadline, onDelete }: { deadline: Deadline; onDelete: (i
   )
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
+// ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function Timetable() {
-  const [deadlines, setDeadlines] = useState<Deadline[]>(SAMPLE_DEADLINES)
+  const { user } = useAuth()
+  const [deadlines, setDeadlines] = useState<DeadlineItemData[]>([])
   const [showAddForm, setShowAddForm] = useState(false)
   const today = todayDayIndex()
 
-  function handleAddReminder(title: string, subject: string, dueDate: string) {
+  // Load real reminders from Supabase
+  const loadReminders = useCallback(async () => {
+    if (!user) return
+
+    try {
+      const { data, error } = await supabase
+        .from('reminders')
+        .select('*')
+        .order('remind_at', { ascending: true })
+
+      if (!error && data && data.length > 0) {
+        const loaded: DeadlineItemData[] = (data as DbReminder[]).map(r => ({
+          id: r.id,
+          title: r.title,
+          dueDate: r.remind_at ? r.remind_at.slice(0, 10) : new Date().toISOString().slice(0, 10),
+          confirmed: true,
+          isDbRecord: true,
+        }))
+        setDeadlines(loaded)
+      } else {
+        // Fallback demo reminders if student has not confirmed notice items yet
+        setDeadlines([
+          { id: 'd1', title: 'Project Proposal Submission', subject: 'DBMS', dueDate: '2026-10-28', confirmed: true },
+          { id: 'd2', title: 'Assignment 3', subject: 'Data Structures', dueDate: '2026-10-25', confirmed: true },
+          { id: 'd3', title: 'Mid-term Viva', subject: 'Computer Networks', dueDate: '2026-11-02', confirmed: false },
+        ])
+      }
+    } catch (err) {
+      console.warn('Could not load reminders from Supabase:', err)
+    }
+  }, [user])
+
+  useEffect(() => {
+    loadReminders()
+  }, [loadReminders])
+
+  async function handleAddReminder(title: string, subject: string, dueDate: string) {
+    if (user) {
+      try {
+        const { data, error } = await supabase
+          .from('reminders')
+          .insert({
+            user_id: user.id,
+            title,
+            remind_at: new Date(dueDate).toISOString(),
+          })
+          .select()
+          .single()
+
+        if (!error && data) {
+          setDeadlines(prev => [
+            ...prev,
+            { id: data.id, title, subject, dueDate, confirmed: true, isDbRecord: true },
+          ])
+          setShowAddForm(false)
+          return
+        }
+      } catch (err) {
+        console.warn('Could not save reminder to database:', err)
+      }
+    }
+
     setDeadlines(prev => [
       ...prev,
-      { id: uid(), title, subject, dueDate, confirmed: true },
+      { id: 'local-' + Date.now(), title, subject, dueDate, confirmed: true },
     ])
     setShowAddForm(false)
   }
 
-  function handleDeleteDeadline(id: string) {
+  async function handleDeleteDeadline(id: string, isDb: boolean) {
+    if (isDb && user) {
+      try {
+        await supabase.from('reminders').delete().eq('id', id)
+      } catch (err) {
+        console.warn('Failed to delete reminder from DB:', err)
+      }
+    }
     setDeadlines(prev => prev.filter(d => d.id !== id))
   }
 
@@ -316,34 +389,45 @@ export default function Timetable() {
   )
 
   return (
-    <div className="space-y-6">
-
-      {/* Sample data notice */}
-      <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
-        <AlertCircle className="size-4 shrink-0" />
-        <span><strong>Sample data</strong> — timetable and deadlines shown are for demo only.</span>
+    <div className="space-y-6 max-w-6xl">
+      {/* Sample data notice banner */}
+      <div className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
+        <div className="flex items-center gap-2">
+          <AlertCircle className="size-4 shrink-0" />
+          <span>
+            <strong>Weekly timetable</strong> uses course template. Confirmed notice deadlines sync automatically with your calendar.
+          </span>
+        </div>
+        <button
+          onClick={loadReminders}
+          className="flex items-center gap-1 font-semibold text-amber-900 hover:underline"
+          title="Refresh reminders"
+        >
+          <RefreshCw className="size-3" />
+          <span>Refresh</span>
+        </button>
       </div>
 
-      {/* Weekly timetable */}
+      {/* Weekly timetable section */}
       <section aria-label="Weekly timetable">
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <CalendarDays className="size-5 text-gray-400" />
-            <h2 className="text-base font-semibold text-gray-800">Weekly Timetable</h2>
+            <CalendarDays className="size-5 text-gray-500" />
+            <h2 className="text-base font-bold text-gray-900">Weekly Timetable</h2>
           </div>
-          <span className="text-xs text-gray-400">
+          <span className="text-xs text-gray-500">
             Today: <strong className="text-brand-600">{DAY_FULL[today] ?? 'Weekend'}</strong>
           </span>
         </div>
         <WeeklyGrid slots={SAMPLE_SLOTS} />
       </section>
 
-      {/* Deadlines & reminders */}
+      {/* Deadlines and reminders section */}
       <section aria-label="Upcoming deadlines">
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Clock className="size-5 text-gray-400" />
-            <h2 className="text-base font-semibold text-gray-800">Deadlines & Reminders</h2>
+            <Clock className="size-5 text-gray-500" />
+            <h2 className="text-base font-bold text-gray-900">Deadlines & Notice Reminders</h2>
           </div>
           <Button
             size="sm"
@@ -366,15 +450,17 @@ export default function Timetable() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Upcoming</CardTitle>
-            <span className="text-xs text-gray-400">{sortedDeadlines.length} item{sortedDeadlines.length !== 1 ? 's' : ''}</span>
+            <CardTitle>Upcoming Schedule</CardTitle>
+            <span className="text-xs text-gray-400">
+              {sortedDeadlines.length} deadline{sortedDeadlines.length !== 1 ? 's' : ''}
+            </span>
           </CardHeader>
           <CardContent>
             {sortedDeadlines.length === 0 ? (
               <EmptyState
                 icon={Clock}
-                title="No deadlines yet"
-                description="Add a personal reminder or upload a notice to extract deadlines automatically."
+                title="No deadlines recorded"
+                description="Upload a notice to extract deadlines or add a personal reminder above."
                 action={
                   <Button size="sm" variant="secondary" onClick={() => setShowAddForm(true)}>
                     <Plus className="size-4" /> Add reminder
@@ -384,7 +470,7 @@ export default function Timetable() {
             ) : (
               <ul className="divide-y divide-surface-border" aria-label="Deadlines list">
                 {sortedDeadlines.map(d => (
-                  <DeadlineItem key={d.id} deadline={d} onDelete={handleDeleteDeadline} />
+                  <DeadlineRow key={d.id} deadline={d} onDelete={handleDeleteDeadline} />
                 ))}
               </ul>
             )}

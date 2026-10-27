@@ -1,20 +1,12 @@
 """
 JWT authentication dependency.
 
-Usage in any router:
-    from app.auth import get_current_user_id
-
-    @router.post("/something")
-    async def my_route(user_id: str = Depends(get_current_user_id)):
-        ...
-
-Why forward the user's JWT instead of using the service-role key?
-  Supabase Row-Level Security (RLS) only fires for the authenticated user.
-  If we used the service-role key, RLS would be bypassed and any user
-  could theoretically read another user's data. By forwarding the user's
-  own JWT, Supabase enforces RLS automatically.
+Validates incoming Supabase JWTs and extracts user information.
+Provides both `get_current_user_id` and `get_current_user` (which includes the raw JWT)
+so the backend can forward the user's token to Supabase for RLS enforcement.
 """
 
+from dataclasses import dataclass
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
@@ -24,12 +16,18 @@ from app.config import settings
 bearer_scheme = HTTPBearer()
 
 
-def get_current_user_id(
+@dataclass
+class AuthUser:
+    user_id: str
+    token: str
+
+
+def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-) -> str:
+) -> AuthUser:
     """
     Validates the Supabase JWT from the Authorization header.
-    Returns the user's UUID (sub claim) on success.
+    Returns AuthUser(user_id, token) on success.
     Raises HTTP 401 on any failure.
     """
     token = credentials.credentials
@@ -38,18 +36,24 @@ def get_current_user_id(
             token,
             settings.supabase_jwt_secret,
             algorithms=["HS256"],
-            # Supabase tokens have audience "authenticated"
             options={"verify_aud": False},
         )
         user_id: str | None = payload.get("sub")
-        if user_id is None:
+        if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token has no subject claim.",
             )
-        return user_id
+        return AuthUser(user_id=user_id, token=token)
     except JWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid or expired token: {exc}",
         ) from exc
+
+
+def get_current_user_id(
+    user: AuthUser = Depends(get_current_user),
+) -> str:
+    """Convenience dependency returning just the user_id."""
+    return user.user_id
