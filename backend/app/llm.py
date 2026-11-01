@@ -115,6 +115,56 @@ def _mock_llm_response(system_prompt: str, user_message: str) -> str:
     or when external API keys have not yet been configured.
     Guarantees valid JSON output that matches the expected schema.
     """
+    # ── Branch A: AI Assistant query ──────────────────────────────────────────
+    if "AI Assistant" in system_prompt or "Question:" in user_message:
+        # Extract question line and document_data
+        q_match = re.search(r"Question:\s*(.*?)(?:\n\n|\n<)", user_message, re.DOTALL)
+        question = q_match.group(1).strip() if q_match else ""
+
+        doc_match = re.search(r"<document_data>(.*?)</document_data>", user_message, re.DOTALL)
+        doc_data = doc_match.group(1).strip() if doc_match else ""
+
+        # Extract words from question (ignoring stop words)
+        stop_words = {"what", "is", "the", "for", "when", "how", "are", "of", "in", "to", "and", "a", "an", "on", "my", "our"}
+        keywords = [w.lower() for w in re.findall(r"\b[a-zA-Z0-9]+\b", question) if w.lower() not in stop_words and len(w) > 2]
+
+        # Search chunks for matching sentences
+        chunk_blocks = re.findall(r"\[(chunk_\w+)\]:\s*(.*?)(?=\n\[chunk_|\Z)", doc_data, re.DOTALL)
+        
+        found_chunk_id = None
+        found_sentence = None
+
+        for c_id, content in chunk_blocks:
+            sentences = [s.strip() for s in content.split(".") if s.strip()]
+            for sent in sentences:
+                sent_lower = sent.lower()
+                # If sentence matches at least one significant keyword
+                if any(k in sent_lower for k in keywords):
+                    found_chunk_id = c_id
+                    found_sentence = sent.strip()
+                    break
+            if found_sentence:
+                break
+
+        if found_sentence and found_chunk_id:
+            return json.dumps({
+                "status": "grounded",
+                "answer": f"According to your document: {found_sentence}.",
+                "citations": [
+                    {
+                        "chunk_id": found_chunk_id,
+                        "snippet": found_sentence[:100],
+                    }
+                ],
+            })
+        else:
+            return json.dumps({
+                "status": "not_found",
+                "answer": "This could not be verified in your uploaded documents.",
+                "citations": [],
+            })
+
+    # ── Branch B: Notice Analyzer ─────────────────────────────────────────────
     text = user_message
 
     # Detect dates formatted like YYYY-MM-DD or DD/MM/YYYY or DD-MM-YYYY
