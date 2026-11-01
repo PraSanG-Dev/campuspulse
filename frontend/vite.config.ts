@@ -11,6 +11,22 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  build: {
+    // Code-split vendor chunks to reduce initial bundle size
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // React core
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          // Supabase client
+          'vendor-supabase': ['@supabase/supabase-js'],
+          // Lucide icons (large)
+          'vendor-lucide': ['lucide-react'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 600,
+  },
   test: {
     // Vitest config lives here so you don't need a separate file
     globals: true,

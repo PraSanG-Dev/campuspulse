@@ -9,6 +9,8 @@ Endpoints:
 import uuid
 import re
 from fastapi import APIRouter, Depends, UploadFile, File, Request, HTTPException, status
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from app.auth import get_current_user, AuthUser
 from app.services.pdf_service import validate_and_extract_pdf
 from app.services.supabase_service import (
@@ -21,6 +23,7 @@ from app.services.supabase_service import (
 from app.config import settings
 
 router = APIRouter(tags=["documents"])
+limiter = Limiter(key_func=get_remote_address)
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -30,6 +33,7 @@ def _sanitize_filename(filename: str) -> str:
 
 
 @router.post("/documents")
+@limiter.limit("10/minute")
 async def upload_document(
     request: Request,
     file: UploadFile = File(...),

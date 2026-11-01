@@ -9,12 +9,15 @@ Endpoints:
 """
 
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from app.auth import get_current_user, AuthUser
 from app.services.supabase_service import get_document_chunks, insert_extracted_items
 from app.services.analyzer_service import analyze_notice_chunks
 
 router = APIRouter(tags=["notices"])
+limiter = Limiter(key_func=get_remote_address)
 
 
 class NoticeAnalyzeRequest(BaseModel):
@@ -23,8 +26,10 @@ class NoticeAnalyzeRequest(BaseModel):
 
 
 @router.post("/notices/analyze")
+@limiter.limit("20/minute")
 async def analyze_notice(
     req: NoticeAnalyzeRequest,
+    request: Request,
     user: AuthUser = Depends(get_current_user),
 ):
     """

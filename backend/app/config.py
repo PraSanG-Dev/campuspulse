@@ -18,12 +18,15 @@ class Settings(BaseSettings):
     supabase_jwt_secret: str
 
     # LLM
-    llm_provider: str = "openai"
+    llm_provider: str = "google"
     llm_api_key: str
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "gemini-1.5-flash"
 
     # App
-    allowed_origins: list[str] = ["http://localhost:5173"]
+    allowed_origins: list[str] = [
+        "http://localhost:5173",
+        "http://localhost:4173",  # Vite preview
+    ]
     max_upload_bytes: int = 10 * 1024 * 1024   # 10 MB
     max_pdf_pages: int = 50
 
