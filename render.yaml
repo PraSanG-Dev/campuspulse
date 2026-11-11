@@ -2,8 +2,11 @@ services:
   - type: web
     name: campuspulse-backend
     runtime: python
+    rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    healthCheckPath: /health
     envVars:
       - key: SUPABASE_URL
         sync: false
@@ -19,4 +22,3 @@ services:
         sync: false
       - key: ALLOWED_ORIGINS
         sync: false
-    healthCheckPath: /health
