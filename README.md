@@ -3,7 +3,9 @@
 > **AI-powered college companion** — attendance tracking, PDF notice analysis, deadline management, and document Q&A with **verifiable source citations**.
 
 Built for a 48-hour hackathon by a solo BCA student.  
-Live demo: *add your Vercel URL here after deployment*
+Live demo: **https://campuspulse-pra-san-g.vercel.app**  
+Backend API: **https://campuspulse-backend.onrender.com**  
+API Docs: **https://campuspulse-backend.onrender.com/docs**
 
 ---
 
