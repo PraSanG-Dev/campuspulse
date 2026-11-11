@@ -4,8 +4,8 @@
 
 Built for a 48-hour hackathon by a solo BCA student.  
 Live demo: **https://campuspulse-pra-san-g.vercel.app**  
-Backend API: **https://campuspulse-backend.onrender.com**  
-API Docs: **https://campuspulse-backend.onrender.com/docs**
+Backend API: **https://campuspulse-backend-squj.onrender.com**  
+API Docs: **https://campuspulse-backend-squj.onrender.com/docs**
 
 ---
 
